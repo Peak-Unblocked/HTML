@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>WorldBox</title>
+    <link rel="shortcut icon" href="https://cdn.jsdelivr.net/gh/SomeRandomFella/portsandrips@b89f82bba9af1f594aed14bd8dbc430c322fce6a/WorldFox/TemplateData/favicon.ico">
+    <style>
+      body { padding: 0; margin: 0; background: #141E2D; }
+      #unity-container { position: fixed; width: 100%; height: 100%; }
+      #unity-canvas { width: 100%; height: 100%; background: #141E2D; }
+      #unity-loading-bar { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: none; text-align: center; }
+      #unity-logo { width: 154px; height: 130px; background: url('https://cdn.jsdelivr.net/gh/SomeRandomFella/portsandrips@b89f82bba9af1f594aed14bd8dbc430c322fce6a/WorldFox/TemplateData/unity-logo-dark.png') no-repeat center; }
+      #unity-progress-bar-empty { margin-left: auto; margin-right: auto; width: 141px; height: 18px; margin-top: 10px; background: url('https://cdn.jsdelivr.net/gh/SomeRandomFella/portsandrips@b89f82bba9af1f594aed14bd8dbc430c322fce6a/WorldFox/TemplateData/progress-bar-empty-dark.png') no-repeat center; }
+      #unity-progress-bar-full { width: 0%; height: 18px; margin-top: 10px; background: url('https://cdn.jsdelivr.net/gh/SomeRandomFella/portsandrips@b89f82bba9af1f594aed14bd8dbc430c322fce6a/WorldFox/TemplateData/progress-bar-full-dark.png') no-repeat center; }
+      #unity-status { margin-top: 12px; color: #c8d4e6; font: 12px/1.4 -apple-system, Segoe UI, Roboto, sans-serif; min-height: 16px; }
+      #unity-warning { position: absolute; left: 50%; top: 5%; transform: translate(-50%); background: white; padding: 10px; display: none; font: 13px/1.4 -apple-system, Segoe UI, Roboto, sans-serif; }
+    </style>
+  </head>
+  <body>
+    <div id="unity-container">
+      <canvas id="unity-canvas" width="960" height="600" tabindex="-1"></canvas>
+      <div id="unity-loading-bar">
+        <div id="unity-logo"></div>
+        <div id="unity-progress-bar-empty">
+          <div id="unity-progress-bar-full"></div>
+        </div>
+        <div id="unity-status"></div>
+      </div>
+      <div id="unity-warning"> </div>
+    </div>
+    <script>
+      (function () {
+        var CDN = "https://cdn.jsdelivr.net/gh/SomeRandomFella/portsandrips@b89f82bba9af1f594aed14bd8dbc430c322fce6a/WorldFox/";
+
+        var MANIFEST = {
+          "Build/WorldFox.data": {
+            size: 70622522,
+            parts: [
+              "Build/WorldFox.data.part000",
+              "Build/WorldFox.data.part001",
+              "Build/WorldFox.data.part002",
+              "Build/WorldFox.data.part003"
+            ]
+          },
+          "Build/WorldFox.wasm": {
+            size: 67595725,
+            parts: [
+              "Build/WorldFox.wasm.part000",
+              "Build/WorldFox.wasm.part001",
+              "Build/WorldFox.wasm.part002",
+              "Build/WorldFox.wasm.part003"
+            ]
+          },
+          "StreamingAssets/Master.bank": {
+            size: 355398656,
+            parts: [
+              "StreamingAssets/Master.bank.part000",
+              "StreamingAssets/Master.bank.part001",
+              "StreamingAssets/Master.bank.part002",
+              "StreamingAssets/Master.bank.part003",
+              "StreamingAssets/Master.bank.part004",
+              "StreamingAssets/Master.bank.part005",
+              "StreamingAssets/Master.bank.part006",
+              "StreamingAssets/Master.bank.part007",
+              "StreamingAssets/Master.bank.part008",
+              "StreamingAssets/Master.bank.part009",
+              "StreamingAssets/Master.bank.part010",
+              "StreamingAssets/Master.bank.part011",
+              "StreamingAssets/Master.bank.part012",
+              "StreamingAssets/Master.bank.part013",
+              "StreamingAssets/Master.bank.part014",
+              "StreamingAssets/Master.bank.part015",
+              "StreamingAssets/Master.bank.part016",
+              "StreamingAssets/Master.bank.part017",
+              "StreamingAssets/Master.bank.part018"
+            ]
+          }
+        };
+
+        var container = document.querySelector("#unity-container");
+        var canvas = document.querySelector("#unity-canvas");
+        var loadingBar = document.querySelector("#unity-loading-bar");
+        var progressBarFull = document.querySelector("#unity-progress-bar-full");
+        var statusText = document.querySelector("#unity-status");
+        var warningBanner = document.querySelector("#unity-warning");
+
+        var nativeFetch = window.fetch.bind(window);
+        var NativeOpen = XMLHttpRequest.prototype.open;
+        var NativeSend = XMLHttpRequest.prototype.send;
+        var NativeSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+
+        window.addEventListener("load", function () {
+          if ("serviceWorker" in navigator) {
+            navigator.serviceWorker.getRegistrations().then(function (registrations) {
+              registrations.forEach(function (registration) {
+                registration.unregister();
+              });
+            });
+          }
+        });
+
+        function unityShowBanner(msg, type) {
+          function updateBannerVisibility() {
+            warningBanner.style.display = warningBanner.children.length ? "block" : "none";
+          }
+          var div = document.createElement("div");
+          div.innerHTML = msg;
+          warningBanner.appendChild(div);
+          if (type == "error") {
+            div.style = "background: red; padding: 10px;";
+          } else {
+            if (type == "warning") div.style = "background: yellow; padding: 10px;";
+            setTimeout(function () {
+              warningBanner.removeChild(div);
+              updateBannerVisibility();
+            }, 5000);
+          }
+          updateBannerVisibility();
+        }
+
+        function contentTypeFor(path) {
+          if (path.endsWith(".wasm")) return "application/wasm";
+          if (path.endsWith(".js")) return "application/javascript";
+          return "application/octet-stream";
+        }
+
+        function matchKey(input) {
+          var raw = typeof input === "string" ? input : (input && input.url) || "";
+          var path;
+          try {
+            path = decodeURIComponent(new URL(raw, window.location.href).pathname);
+          } catch (e) {
+            path = String(raw);
+          }
+          path = path.replace(/\\/g, "/").split("?")[0];
+          for (var key in MANIFEST) {
+            if (path === key || path.endsWith("/" + key)) return key;
+          }
+          return null;
+        }
+
+        var totalSplitBytes = 0;
+        var loadedSplitBytes = 0;
+
+        function setStatus(text) {
+          statusText.textContent = text;
+        }
+
+        function reportProgress(delta) {
+          loadedSplitBytes += delta;
+          if (!totalSplitBytes) return;
+          var mb = function (n) { return (n / 1048576).toFixed(0); };
+          setStatus("Downloading " + mb(loadedSplitBytes) + " / " + mb(totalSplitBytes) + " MB");
+        }
+
+        function loadParts(entry) {
+          totalSplitBytes += entry.size;
+          var parts = entry.parts;
+          var buffers = new Array(parts.length);
+          var next = 0;
+          var done = 0;
+          var active = 0;
+          var limit = Math.min(4, parts.length);
+          var rejected = false;
+
+          return new Promise(function (resolve, reject) {
+            function start(index) {
+              active++;
+              nativeFetch(CDN + parts[index]).then(function (response) {
+                if (!response.ok) throw new Error("Failed to load " + parts[index] + ": " + response.status);
+                return response.arrayBuffer();
+              }).then(function (buffer) {
+                buffers[index] = buffer;
+                reportProgress(buffer.byteLength);
+                active--;
+                done++;
+                if (done === parts.length) resolve(buffers);
+                else pump();
+              }).catch(function (error) {
+                if (rejected) return;
+                rejected = true;
+                reject(error);
+              });
+            }
+            function pump() {
+              while (!rejected && active < limit && next < parts.length) {
+                start(next++);
+              }
+            }
+            pump();
+          });
+        }
+
+        var cache = {};
+
+        function loadSplitBlob(key) {
+          if (!cache[key]) {
+            cache[key] = loadParts(MANIFEST[key]).then(function (buffers) {
+              return new Blob(buffers, { type: contentTypeFor(key) });
+            });
+          }
+          return cache[key];
+        }
+
+        window.fetch = function (input, init) {
+          var key = matchKey(input);
+          if (!key) return nativeFetch(input, init);
+          return loadSplitBlob(key).then(function (blob) {
+            return new Response(blob, {
+              status: 200,
+              statusText: "OK",
+              headers: {
+                "Content-Type": contentTypeFor(key),
+                "Content-Length": String(MANIFEST[key].size)
+              }
+            });
+          });
+        };
+
+        XMLHttpRequest.prototype.open = function (method, url) {
+          var key = matchKey(url);
+          if (key) {
+            this.__splitKey = key;
+            this.__splitUrl = url;
+            Object.defineProperty(this, "readyState", { value: 1, configurable: true, writable: true });
+            return;
+          }
+          delete this.__splitKey;
+          return NativeOpen.apply(this, arguments);
+        };
+
+        XMLHttpRequest.prototype.setRequestHeader = function () {
+          if (this.__splitKey) return;
+          return NativeSetHeader.apply(this, arguments);
+        };
+
+        XMLHttpRequest.prototype.send = function () {
+          if (!this.__splitKey) return NativeSend.apply(this, arguments);
+          var self = this;
+          var key = self.__splitKey;
+
+          function define(name, value) {
+            Object.defineProperty(self, name, { value: value, configurable: true, writable: true });
+          }
+
+          loadSplitBlob(key).then(function (blob) {
+            if (self.responseType === "blob") return blob;
+            return blob.arrayBuffer().then(function (buffer) {
+              if (self.responseType === "arraybuffer") return buffer;
+              return new TextDecoder().decode(buffer);
+            });
+          }).then(function (result) {
+            define("status", 200);
+            define("statusText", "OK");
+            define("responseURL", CDN + key);
+            define("response", result);
+            if (typeof result === "string") define("responseText", result);
+            define("readyState", 4);
+            define("getResponseHeader", function (name) {
+              name = String(name).toLowerCase();
+              if (name === "content-type") return contentTypeFor(key);
+              if (name === "content-length") return String(MANIFEST[key].size);
+              return null;
+            });
+            define("getAllResponseHeaders", function () {
+              return "content-type: " + contentTypeFor(key) + "\r\ncontent-length: " + MANIFEST[key].size + "\r\n";
+            });
+            var detail = { lengthComputable: true, loaded: MANIFEST[key].size, total: MANIFEST[key].size };
+            self.dispatchEvent(new Event("readystatechange"));
+            self.dispatchEvent(new ProgressEvent("progress", detail));
+            self.dispatchEvent(new ProgressEvent("load", detail));
+            self.dispatchEvent(new ProgressEvent("loadend", detail));
+          }).catch(function () {
+            define("status", 0);
+            define("readyState", 4);
+            self.dispatchEvent(new Event("readystatechange"));
+            self.dispatchEvent(new ProgressEvent("error"));
+            self.dispatchEvent(new ProgressEvent("loadend"));
+          });
+        };
+
+        if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+          var meta = document.createElement("meta");
+          meta.name = "viewport";
+          meta.content = "width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, shrink-to-fit=yes";
+          document.getElementsByTagName("head")[0].appendChild(meta);
+        }
+
+        var config = {
+          dataUrl: CDN + "Build/WorldFox.data",
+          frameworkUrl: CDN + "Build/WorldFox.framework.js",
+          codeUrl: CDN + "Build/WorldFox.wasm",
+          streamingAssetsUrl: CDN + "StreamingAssets",
+          companyName: "mkarpenko",
+          productName: "WorldBox",
+          productVersion: "0.51.2",
+          showBanner: unityShowBanner
+        };
+
+        loadingBar.style.display = "block";
+        setStatus("Loading");
+
+        var script = document.createElement("script");
+        script.src = CDN + "Build/WorldFox.loader.js";
+        script.onload = function () {
+          createUnityInstance(canvas, config, function (progress) {
+            progressBarFull.style.width = 100 * progress + "%";
+          }).then(function () {
+            loadingBar.style.display = "none";
+          }).catch(function (message) {
+            setStatus("");
+            unityShowBanner(String(message), "error");
+          });
+        };
+        script.onerror = function () {
+          setStatus("");
+          unityShowBanner("Failed to load WorldFox.loader.js from jsDelivr.", "error");
+        };
+        document.body.appendChild(script);
+      })();
+    </script>
+  </body>
+</html>
