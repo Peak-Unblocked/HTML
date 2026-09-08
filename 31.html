@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en-us">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no, minimum-scale=1, maximum-scale=1">
+<title>Balatro</title>
+<style>
+html,body{margin:0;padding:0;width:100vw;height:100vh;overflow:hidden;background:rgb(154,205,237);color:rgb(28,78,104);font-family:arial}
+#canvas{padding:0;margin:0;display:block;border:0 none;position:absolute;top:0;left:0;width:100vw!important;height:100vh!important;visibility:hidden}
+#loadingCanvas{position:absolute;top:0;left:0}
+</style>
+</head>
+<body>
+<center><div>
+<canvas id="loadingCanvas" oncontextmenu="event.preventDefault()" width="800" height="600"></canvas>
+<canvas id="canvas" oncontextmenu="event.preventDefault()" width="100%" height="100%"></canvas>
+</div></center>
+
+<script>
+var newConsole=(function(oldConsole){
+  return {
+    log:function(){var data=[];for(var i=0;i<arguments.length;i++){data[i]=arguments[i];}
+      if(data.length==1){
+        if(typeof(data[0])=="string"&&data[0].indexOf("callJavascriptFunction")!=-1){
+          try{return eval(data[0].split("callJavascriptFunction ")[1]);}
+          catch(e){oldConsole.error("callJS error: "+e.message);return null;}
+        }else{oldConsole.log(data[0]);return null;}
+      }else oldConsole.log(data[0],data.splice(1));
+      return null;
+    },
+    info:function(){var data=[];for(var i=0;i<arguments.length;i++){data[i]=arguments[i];}if(data.length==1)oldConsole.info(data[0]);else oldConsole.info(data[0],data.splice(1));},
+    warn:function(){var data=[];for(var i=0;i<arguments.length;i++){data[i]=arguments[i];}if(data.length==1)oldConsole.warn(data[0]);else oldConsole.warn(data[0],data.splice(1));},
+    error:function(){var data=[];for(var i=0;i<arguments.length;i++){data[i]=arguments[i];}if(data.length==1)oldConsole.error(data[0]);else oldConsole.error(data[0],data.splice(1));},
+    clear:function(){oldConsole.clear();},
+    assert:function(){var data=[];for(var i=0;i<arguments.length;i++){data[i]=arguments[i];}oldConsole.assert(data[0],data[1],data.splice(2));},
+    group:function(){var data=[];for(var i=0;i<arguments.length;i++){data[i]=arguments[i];}oldConsole.group(data[0],data.splice(1));},
+    groupCollapsed:function(){var data=[];for(var i=0;i<arguments.length;i++){data[i]=arguments[i];}oldConsole.groupCollapsed(data[0],data.splice(1));},
+    groupEnd:function(){oldConsole.groupEnd();}
+  };
+}(window.console));
+window.console=newConsole;
+</script>
+
+<script>
+var CDN="https://cdn.jsdelivr.net/gh/SomeRandomFella/portsandrips@b89f82bba9af1f594aed14bd8dbc430c322fce6a/balatro/";
+
+window.callad=function(){window.parent.postMessage({type:'adcall'},'*');};
+
+var loadingCanvasEl=document.getElementById("loadingCanvas");
+loadingCanvasEl.width=window.innerWidth||document.documentElement.clientWidth||document.body.clientWidth;
+loadingCanvasEl.height=window.innerHeight||document.documentElement.clientHeight||document.body.clientHeight;
+var loadingContext=loadingCanvasEl.getContext('2d');
+
+function drawLoadingText(text){
+  var c=loadingContext.canvas;
+  loadingContext.fillStyle="rgb(142,195,227)";
+  loadingContext.fillRect(0,0,c.scrollWidth,c.scrollHeight);
+  loadingContext.font='2em arial';
+  loadingContext.textAlign='center';
+  loadingContext.fillStyle="rgb(11,86,117)";
+  loadingContext.fillText(text,c.scrollWidth/2,c.scrollHeight/2);
+}
+
+function goFullScreen(){
+  var canvas=document.getElementById("canvas");
+  if(canvas.requestFullScreen)canvas.requestFullScreen();
+  else if(canvas.webkitRequestFullScreen)canvas.webkitRequestFullScreen();
+  else if(canvas.mozRequestFullScreen)canvas.mozRequestFullScreen();
+}
+function FullScreenHook(){
+  var canvas=document.getElementById("canvas");
+  canvas.width=window.innerWidth||document.documentElement.clientWidth||document.body.clientWidth;
+  canvas.height=window.innerHeight||document.documentElement.clientHeight||document.body.clientHeight;
+}
+
+window.onload=function(){window.focus();};
+window.onclick=function(){window.focus();};
+window.addEventListener("keydown",function(e){if([32,37,38,39,40].indexOf(e.keyCode)>-1){e.preventDefault();}},false);
+
+var Module={
+  arguments:["./game.love"],
+  INITIAL_MEMORY:256000000,
+  locateFile:function(path){return CDN+path;},
+  printErr:console.error.bind(console),
+  canvas:(function(){
+    var canvas=document.getElementById('canvas');
+    canvas.addEventListener("webglcontextlost",function(e){alert('WebGL context lost. You will need to reload the page.');e.preventDefault();},false);
+    return canvas;
+  })(),
+  setStatus:function(text){
+    if(text){drawLoadingText(text);}
+    else if(Module.remainingDependencies===0){
+      document.getElementById('loadingCanvas').style.display='none';
+      document.getElementById('canvas').style.visibility='visible';
+    }
+  },
+  totalDependencies:0,
+  remainingDependencies:0,
+  monitorRunDependencies:function(left){
+    this.remainingDependencies=left;
+    this.totalDependencies=Math.max(this.totalDependencies,left);
+    Module.setStatus(left?'Preparing... ('+(this.totalDependencies-left)+'/'+this.totalDependencies+')':'All downloads complete.');
+  }
+};
+Module.setStatus('Downloading...');
+window.onerror=function(){
+  Module.setStatus('Exception thrown, see JavaScript console');
+  Module.setStatus=function(text){if(text)Module.printErr('[post-exception status] '+text);};
+};
+
+var loveReady=false,cacheReady=false,started=false;
+function maybeStart(){if(loveReady&&cacheReady&&!started){started=true;Love(Module);}}
+function ensurePreloadCache(done){
+  var idb=window.indexedDB||window.mozIndexedDB||window.webkitIndexedDB||window.msIndexedDB;
+  if(!idb){done();return;}
+  var req;
+  try{req=idb.open("EM_PRELOAD_CACHE");}catch(e){done();return;}
+  req.onerror=function(){done();};
+  req.onupgradeneeded=function(){};
+  req.onsuccess=function(){
+    var db=req.result;
+    var ok=db.objectStoreNames.contains("METADATA")&&db.objectStoreNames.contains("PACKAGES");
+    db.close();
+    if(ok){done();return;}
+    var del=idb.deleteDatabase("EM_PRELOAD_CACHE");
+    del.onsuccess=function(){done();};
+    del.onerror=function(){done();};
+    del.onblocked=function(){done();};
+  };
+}
+ensurePreloadCache(function(){cacheReady=true;maybeStart();});
+var applicationLoad=function(e){loveReady=true;maybeStart();};
+</script>
+
+<script type="text/javascript" src="https://cdn.jsdelivr.net/gh/SomeRandomFella/portsandrips@b89f82bba9af1f594aed14bd8dbc430c322fce6a/balatro/game.js"></script>
+<script async type="text/javascript" src="https://cdn.jsdelivr.net/gh/SomeRandomFella/portsandrips@b89f82bba9af1f594aed14bd8dbc430c322fce6a/balatro/love.js" onload="applicationLoad(this)"></script>
+</body>
+</html>
