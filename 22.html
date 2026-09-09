@@ -1,136 +1,460 @@
 <!DOCTYPE html>
 <html lang="en-us">
 <head>
-  <base href="https://cdn.jsdelivr.net/gh/NotRexed/Unblocked-Games@latest/diceamillion/">
+  <!-- Assets live on jsDelivr. This <base> is load-bearing: the engine calls
+       audioWorklet.addModule("audio-worklet.js"), which resolves against the
+       document base rather than against the script, so it has to point here
+       or the audio worklet 404s when this page is hosted anywhere else. -->
+  <base href="https://cdn.jsdelivr.net/gh/Peak-Unblocked/Multi-File-Games@main/DiceAMillion/">
   <meta charset="utf-8" />
-  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
   <meta name="viewport" content="viewport-fit=cover, width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0" />
   <title>Dice a Million</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
     #canvas { position: fixed; top: 0; left: 0; transform-origin: top left; }
+
+    #loader {
+      position: fixed; inset: 0; z-index: 10;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 22px;
+      background: #08080b;
+      color: #e7e7ea;
+      font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      transition: opacity .45s ease;
+    }
+    #loader.done { opacity: 0; pointer-events: none; }
+
+    #title { font-size: 30px; font-weight: 600; letter-spacing: .02em; color: #fff; }
+
+    #bar {
+      width: min(440px, 74vw); height: 6px;
+      background: #232329; border-radius: 999px; overflow: hidden;
+    }
+    #fill {
+      height: 100%; width: 0%;
+      background: linear-gradient(90deg, #6d7cff, #9d7bff);
+      border-radius: 999px;
+      transition: width .18s ease-out;
+    }
+
+    #pct { font-size: 13px; font-variant-numeric: tabular-nums; color: #9b9ba5; }
+    #status { font-size: 14px; color: #d6d6db; min-height: 1.5em; text-align: center; padding: 0 16px; }
+    #detail { font-size: 12px; color: #6f6f7a; font-variant-numeric: tabular-nums; min-height: 1.5em; }
+
+    #loader.error #fill { background: #d9484d; }
+    #loader.error #status { color: #ff9b9e; }
+
+    @media (prefers-reduced-motion: reduce) { #fill, #loader { transition: none; } }
   </style>
 </head>
 <body>
   <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
 
-  <script>
-  const canvas = document.getElementById('canvas');
-
-  const origSetProperty = canvas.style.setProperty.bind(canvas.style);
-  canvas.style.setProperty = function(prop, val, priority) {
-    if (prop === 'width' || prop === 'height') return;
-    return origSetProperty(prop, val, priority);
-  };
-
-  ['width', 'height'].forEach(prop => {
-    Object.defineProperty(canvas.style, prop, {
-      set: function() {},
-      get: function() { return ''; },
-      configurable: true
-    });
-  });
-
-  function scaleCanvas() {
-    const cw = canvas.width;
-    const ch = canvas.height;
-    if (!cw || !ch) return;
-    const scaleX = window.innerWidth / cw;
-    const scaleY = window.innerHeight / ch;
-    canvas.style.transform = `scale(${scaleX}, ${scaleY})`;
-  }
-
-  new MutationObserver(scaleCanvas).observe(canvas, { attributes: true, attributeFilter: ['width', 'height'] });
-  window.addEventListener('resize', scaleCanvas);
-  setInterval(scaleCanvas, 200);
-  </script>
+  <div id="loader">
+    <div id="title">Dice a Million</div>
+    <div id="bar"><div id="fill"></div></div>
+    <div id="pct">0%</div>
+    <div id="status">Starting&hellip;</div>
+    <div id="detail"></div>
+  </div>
 
   <script>
-  const _open = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function(method, url, ...args) {
-    if (typeof url === 'string' && url.includes('mus.dat')) {
-      const xhr = this;
-      const BASE = 'https://cdn.jsdelivr.net/gh/NotRexed/Unblocked-Games@latest/diceamillion/';
-      this.send = function() {
-        Promise.all([
-          fetch(BASE + 'mus.dat.part1').then(r => r.arrayBuffer()),
-          fetch(BASE + 'mus.dat.part2').then(r => r.arrayBuffer()),
-          fetch(BASE + 'mus.dat.part3').then(r => r.arrayBuffer()),
-        ]).then(([p1, p2, p3]) => {
-          const combined = new Uint8Array(p1.byteLength + p2.byteLength + p3.byteLength);
-          combined.set(new Uint8Array(p1), 0);
-          combined.set(new Uint8Array(p2), p1.byteLength);
-          combined.set(new Uint8Array(p3), p1.byteLength + p2.byteLength);
-          Object.defineProperty(xhr, 'response', { value: combined.buffer });
-          Object.defineProperty(xhr, 'status', { value: 200 });
-          Object.defineProperty(xhr, 'readyState', { value: 4 });
-          if (xhr.onload) xhr.onload();
-        });
+  /* ==================================================================
+     Single-file loader for Dice a Million.
+
+     Everything the game needs is pulled from jsDelivr, reassembled in the
+     browser, and handed to the GameMaker runner through its own hooks.
+     Host this one file anywhere; nothing else has to sit beside it.
+
+     The whole loader lives in one closure on purpose. runner.js is
+     minified emscripten output that declares a swarm of short globals
+     (var mb, nb, ob, E, v, ...), so anything this file leaves on window
+     is liable to be overwritten the moment the engine loads. Only the
+     handful of names the runner actually calls are exported, at the
+     bottom.
+     ================================================================== */
+  (function () {
+    'use strict';
+
+    /* Resolves to the <base> above. */
+    var ASSET_BASE = new URL('.', document.baseURI).href;
+
+    /* Assets the loader fetches itself, in the order they are needed.
+       `size` is the uncompressed byte count and only drives the progress
+       bar - jsDelivr replies chunked with no Content-Length, so there is
+       nothing to read it from at runtime. A stale size costs accuracy,
+       not the load. */
+    var ASSETS = [
+      { name: 'runner.js',   size: 155182,   label: 'engine' },
+      { name: 'runner.wasm', size: 5692237,  label: 'engine core' },
+      { name: 'runner.data', size: 24854940, label: 'engine assets' },
+      { name: 'game.unx',    size: 14121630, label: 'game data' },
+      { name: 'snd.dat',     size: 18768568, label: 'sound' },
+      { name: 'mus.dat',     size: 65250028, label: 'music' }
+    ];
+
+    var PROBE_BATCH = 4;   /* parts probed per round trip once a split is found */
+    var MAX_PARTS = 64;    /* refuse to probe forever if something is wrong */
+
+    var SPLIT = {};        /* name -> part count, discovered at boot */
+    var CACHE = {};        /* name -> ArrayBuffer, for assets fetched ahead of the engine */
+
+    var TOTAL_BYTES = ASSETS.reduce(function (n, a) { return n + a.size; }, 0);
+    var loadedBytes = 0;
+    var shownPct = 0;
+
+    /* -------------------------------------------------------------- UI */
+
+    var canvas = document.getElementById('canvas');
+    var el = {
+      loader: document.getElementById('loader'),
+      fill:   document.getElementById('fill'),
+      pct:    document.getElementById('pct'),
+      status: document.getElementById('status'),
+      detail: document.getElementById('detail')
+    };
+
+    function megabytes(n) { return (n / 1048576).toFixed(1) + ' MB'; }
+
+    function setStatus(text, detail) {
+      el.status.textContent = text;
+      el.detail.textContent = detail || '';
+    }
+
+    function paintProgress() {
+      var pct = TOTAL_BYTES ? (loadedBytes / TOTAL_BYTES) * 100 : 0;
+      /* never go backwards, never overshoot - sizes are estimates */
+      shownPct = Math.max(shownPct, Math.min(pct, 100));
+      el.fill.style.width = shownPct.toFixed(1) + '%';
+      el.pct.textContent = Math.floor(shownPct) + '%';
+    }
+
+    function fail(err) {
+      console.error('[loader]', err);
+      el.loader.classList.add('error');
+      el.loader.classList.remove('done');
+      setStatus('Could not load the game.', String((err && err.message) || err));
+    }
+
+    var finished = false;
+    function finish() {
+      if (finished) return;
+      finished = true;
+      loadedBytes = TOTAL_BYTES;
+      paintProgress();
+      setStatus('Ready', '');
+      el.loader.classList.add('done');
+      setTimeout(function () { el.loader.style.display = 'none'; }, 600);
+    }
+
+    /* ----------------------------------------------------- downloading */
+
+    function partUrl(name, i) { return ASSET_BASE + name + '.part' + i; }
+
+    function exists(url) {
+      return fetch(url, { method: 'HEAD' })
+        .then(function (r) { return r.ok; })
+        .catch(function () { return false; });
+    }
+
+    /* Count contiguous parts from .part1. One probe settles whether an
+       asset is split at all; only split ones probe outwards. */
+    function countParts(name) {
+      return exists(partUrl(name, 1)).then(function (isSplit) {
+        if (!isSplit) return 0;
+        function batch(start) {
+          var probes = [];
+          for (var i = start; i < start + PROBE_BATCH && i <= MAX_PARTS; i++) probes.push(exists(partUrl(name, i)));
+          if (!probes.length) return start - 1;
+          return Promise.all(probes).then(function (res) {
+            var k = 0;
+            while (k < res.length && res[k]) k++;
+            if (k === res.length) return batch(start + k);
+            return start - 1 + k;
+          });
+        }
+        return batch(2);
+      });
+    }
+
+    function discover() {
+      setStatus('Checking files…');
+      return Promise.all(ASSETS.map(function (a) {
+        return countParts(a.name).then(function (n) { if (n > 0) SPLIT[a.name] = n; });
+      })).then(function () {
+        var names = Object.keys(SPLIT);
+        console.log('[loader] split assets: ' + (names.length
+          ? names.map(function (n) { return n + ' x' + SPLIT[n]; }).join(', ')
+          : 'none'));
+      });
+    }
+
+    /* A growable byte sink. Sized up front from the table so the common
+       case never copies, but it grows rather than throwing if a file turns
+       out bigger than expected. */
+    function makeSink(expected) {
+      return {
+        buf: new Uint8Array(expected || 0),
+        len: 0,
+        write: function (chunk) {
+          var need = this.len + chunk.length;
+          if (need > this.buf.length) {
+            var bigger = new Uint8Array(Math.max(need, Math.ceil(this.buf.length * 1.5)));
+            bigger.set(this.buf.subarray(0, this.len));
+            this.buf = bigger;
+          }
+          this.buf.set(chunk, this.len);
+          this.len += chunk.length;
+        },
+        result: function () {
+          return this.len === this.buf.length ? this.buf.buffer : this.buf.slice(0, this.len).buffer;
+        }
       };
-      return _open.call(this, method, url, ...args);
     }
-    return _open.call(this, method, url, ...args);
-  };
-  </script>
 
-  <script>
-  function manifestFiles() {
-    return ["runner.data","runner.js","runner.wasm","audio-worklet.js","game.unx","mus.dat","snd.dat","resources/eb.mp4"].join(";");
-  }
-  function manifestFilesMD5() {
-    return ["f72bbdcbdcd1d3841ceaa4a4e25311a5","b7692ef32b6fab43c77fb58735db6034","75dbb242c2e3c7a074418a2ed001b1fa","e8f1e8db8cf996f8715a6f2164c2e44e","fc7cc2bc1c5fa5c557eb1734440275a1","48d4f0d2c6d41ff77166028cf5cd0447","0e648dc17529bd2dcd011b106c3af2e4","df927c8b5ff0d54d9460330091b5b0ba"];
-  }
-  function onFirstFrameRendered() {}
-  var g_pWadLoadCallback = undefined;
-  function setWadLoadCallback(cb) { g_pWadLoadCallback = cb; if (cb) cb(); }
-  var g_pAddAsyncMethod = -1;
-  function setAddAsyncMethod(m) { g_pAddAsyncMethod = m; }
-  var g_pJSExceptionHandler = undefined;
-  function setJSExceptionHandler(h) { g_pJSExceptionHandler = h; }
-  function hasJSExceptionHandler() { return typeof g_pJSExceptionHandler === 'function'; }
-  function doJSExceptionHandler(j) { if (hasJSExceptionHandler()) g_pJSExceptionHandler(JSON.parse(j)); }
-  </script>
+    /* Stream one URL into a sink, reporting bytes as they arrive. */
+    function streamInto(url, sink, onBytes) {
+      return fetch(url).then(function (res) {
+        if (!res.ok) throw new Error(url.split('/').pop() + ' — HTTP ' + res.status);
 
-  <script>
-  var Module = {
-    preRun: [],
-    postRun: [],
-    print: function(text) { console.log(text); },
-    printErr: function(text) { console.error(text); },
-    canvas: document.getElementById('canvas'),
-    setStatus: function(text) { console.log('Status:', text); },
-    totalDependencies: 0,
-    monitorRunDependencies: function(left) {
-      this.totalDependencies = Math.max(this.totalDependencies, left);
-    },
-    audioContext: (function() {
-      try {
-        var AC = window.AudioContext || window.webkitAudioContext;
-        return new AC();
-      } catch(e) { return null; }
-    })(),
-  };
-  document.addEventListener('click', function() {
-    if (Module.audioContext && Module.audioContext.state === 'suspended') {
-      Module.audioContext.resume();
+        if (!res.body || !res.body.getReader) {
+          /* no streams (older browsers): one shot, one progress tick */
+          return res.arrayBuffer().then(function (buf) {
+            var u8 = new Uint8Array(buf);
+            sink.write(u8);
+            onBytes(u8.length);
+          });
+        }
+
+        var reader = res.body.getReader();
+        return (function pump() {
+          return reader.read().then(function (r) {
+            if (r.done) return;
+            sink.write(r.value);
+            onBytes(r.value.length);
+            return pump();
+          });
+        })();
+      });
     }
-  }, { once: true });
-  </script>
 
-  <script>
-  (async function() {
-    const BASE = 'https://cdn.jsdelivr.net/gh/NotRexed/Unblocked-Games@latest/diceamillion/';
-    const res = await fetch(BASE + 'runner.js');
-    let text = await res.text();
-    text = text.replace(/new Worker\(["']([^"']+)["']\)/g, (match, url) => {
-      if (!url.startsWith('http')) return `new Worker("${BASE}${url}")`;
-      return match;
+    /* Download one logical asset, stitching its parts if it is split.
+       Parts go one after another into a single buffer, so peak memory is
+       the size of the file rather than twice it. */
+    function getAsset(a) {
+      var count = SPLIT[a.name] || 0;
+      var human = a.label ? a.label + ' (' + a.name + ')' : a.name;
+      var startBytes = loadedBytes;
+      var sink = makeSink(a.size);
+
+      function onBytes(n) {
+        loadedBytes += n;
+        paintProgress();
+        setStatus('Downloading ' + human,
+          megabytes(loadedBytes - startBytes) + ' of ' + megabytes(a.size) +
+          (count ? '  ·  ' + count + ' parts' : ''));
+      }
+
+      if (!count) {
+        return streamInto(ASSET_BASE + a.name, sink, onBytes).then(function () { return sink.result(); });
+      }
+
+      var i = 1;
+      return (function next() {
+        if (i > count) return sink.result();
+        var n = i++;
+        setStatus('Downloading ' + human, 'part ' + n + ' of ' + count);
+        return streamInto(partUrl(a.name, n), sink, onBytes).then(next);
+      })();
+    }
+
+    function assetByName(name) {
+      for (var i = 0; i < ASSETS.length; i++) if (ASSETS[i].name === name) return ASSETS[i];
+      return null;
+    }
+
+    /* Which asset, if any, a URL is asking for. */
+    function assetFor(url) {
+      if (typeof url !== 'string' || url.indexOf('.part') !== -1) return null;
+      for (var i = 0; i < ASSETS.length; i++) if (url.indexOf(ASSETS[i].name) !== -1) return ASSETS[i];
+      return null;
+    }
+
+    /* ---------------------------------------------------- canvas scaler
+
+       The runner sets canvas.width/height (the render target) and also
+       tries to drive canvas.style.width/height. Two things sizing the same
+       element fight each other, so the style setters are neutered and the
+       element is stretched to the viewport with a transform instead. */
+
+    var origSetProperty = canvas.style.setProperty.bind(canvas.style);
+    canvas.style.setProperty = function (prop, val, priority) {
+      if (prop === 'width' || prop === 'height') return;
+      return origSetProperty(prop, val, priority);
+    };
+
+    ['width', 'height'].forEach(function (prop) {
+      Object.defineProperty(canvas.style, prop, {
+        set: function () {},
+        get: function () { return ''; },
+        configurable: true
+      });
     });
-    const blob = new Blob([text], { type: 'application/javascript' });
-    const script = document.createElement('script');
-    script.src = URL.createObjectURL(blob);
-    document.body.appendChild(script);
+
+    function scaleCanvas() {
+      var cw = canvas.width, ch = canvas.height;
+      if (!cw || !ch) return;
+      canvas.style.transform = 'scale(' + (window.innerWidth / cw) + ', ' + (window.innerHeight / ch) + ')';
+    }
+
+    new MutationObserver(scaleCanvas).observe(canvas, { attributes: true, attributeFilter: ['width', 'height'] });
+    window.addEventListener('resize', scaleCanvas);
+    setInterval(scaleCanvas, 200);
+
+    /* ------------------------------------------------- feeding the engine
+
+       game.unx / snd.dat / mus.dat are pulled by GameMaker through an XHR
+       that reads .status, .response and fires .onload. Intercept it, serve
+       from cache when the bytes are already here, otherwise download on
+       the spot so the bar keeps moving. */
+
+    var _open = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url) {
+      var rest = Array.prototype.slice.call(arguments, 2);
+      var asset = assetFor(url);
+
+      /* runner.js and runner.wasm never reach XHR - they come through the
+         loader and Module.wasmBinary. runner.data goes through
+         Module.getPreloadedPackage. */
+      if (asset && asset.name !== 'runner.js' && asset.name !== 'runner.wasm' && asset.name !== 'runner.data') {
+        var xhr = this;
+        this.send = function () {
+          var ready = CACHE[asset.name] ? Promise.resolve(CACHE[asset.name]) : getAsset(asset);
+
+          ready.then(function (buf) {
+            delete CACHE[asset.name];        /* the engine copies it into its heap */
+            Object.defineProperty(xhr, 'response',   { value: buf, configurable: true });
+            Object.defineProperty(xhr, 'status',     { value: 200, configurable: true });
+            Object.defineProperty(xhr, 'readyState', { value: 4,   configurable: true });
+            if (xhr.onreadystatechange) xhr.onreadystatechange();
+            if (xhr.onload) xhr.onload();
+            try { xhr.dispatchEvent(new Event('load')); } catch (e) {}
+          })['catch'](function (err) {
+            fail(err);
+            if (xhr.onerror) xhr.onerror(err);
+          });
+        };
+      }
+
+      return _open.apply(this, [method, url].concat(rest));
+    };
+
+    /* ------------------------------------------------------- the engine */
+
+    var Module = {
+      preRun: [],
+      postRun: [],
+      print: function (text) { console.log(text); },
+      printErr: function (text) { console.error(text); },
+      canvas: canvas,
+      setStatus: function () {},
+      totalDependencies: 0,
+      monitorRunDependencies: function (left) {
+        this.totalDependencies = Math.max(this.totalDependencies, left);
+      },
+      /* runner.js is injected as a blob, so it cannot work out its own folder. */
+      locateFile: function (path) {
+        if (/^(https?:|blob:|data:|\/\/)/.test(path)) return path;
+        return ASSET_BASE + path;
+      },
+      audioContext: (function () {
+        try {
+          var AC = window.AudioContext || window.webkitAudioContext;
+          return new AC();
+        } catch (e) { return null; }
+      })()
+    };
+
+    document.addEventListener('click', function () {
+      if (Module.audioContext && Module.audioContext.state === 'suspended') {
+        Module.audioContext.resume();
+      }
+    }, { once: true });
+
+    /* Names runner.js calls as bare globals. Everything else in this file
+       stays in the closure, out of reach of the runner's own globals. */
+    window.Module = Module;
+    window.manifestFiles = function () {
+      return ["runner.data","runner.js","runner.wasm","audio-worklet.js","game.unx","mus.dat","snd.dat"].join(";");
+    };
+    window.manifestFilesMD5 = function () {
+      return ["bb6142ec21a2789267e542c4c38cba56","d7cda034949d7a25b91df4e5706946e7","6344cea96b6757c3753745b7ebf72d7d","5d0a0227c50a283fe2af3066b3b0a104","80c0ab47c0cbcbe0f49e2e560c749d1c","46b0c4b976a150dd2926cd5560894172","500b1a404adcbb0c18b79f30c1c32cd5"];
+    };
+    /* Called the moment the first frame is on screen. */
+    window.onFirstFrameRendered = function () { finish(); };
+    window.g_pWadLoadCallback = undefined;
+    window.setWadLoadCallback = function (cb) { window.g_pWadLoadCallback = cb; if (cb) cb(); };
+    window.g_pAddAsyncMethod = -1;
+    window.setAddAsyncMethod = function (m) { window.g_pAddAsyncMethod = m; };
+    window.g_pJSExceptionHandler = undefined;
+    window.setJSExceptionHandler = function (h) { window.g_pJSExceptionHandler = h; };
+    window.hasJSExceptionHandler = function () { return typeof window.g_pJSExceptionHandler === 'function'; };
+    window.doJSExceptionHandler = function (j) {
+      if (window.hasJSExceptionHandler()) window.g_pJSExceptionHandler(JSON.parse(j));
+    };
+
+    /* ------------------------------------------------------------ boot */
+
+    paintProgress();
+
+    discover().then(function () {
+      return getAsset(assetByName('runner.wasm'));
+    }).then(function (wasm) {
+      /* The runner uses this instead of fetching the wasm itself. */
+      Module.wasmBinary = wasm;
+      return getAsset(assetByName('runner.data'));
+    }).then(function (pkg) {
+      /* Asked for synchronously during startup, so it has to be ready first. */
+      Module.getPreloadedPackage = function (url, size) {
+        if (typeof url === 'string' && url.indexOf('runner.data') !== -1) {
+          if (size && pkg.byteLength !== size) {
+            console.warn('[loader] runner.data is ' + pkg.byteLength + ' bytes, engine expected ' + size);
+          }
+          return pkg;
+        }
+        return null;
+      };
+      return getAsset(assetByName('runner.js'));
+    }).then(function (buf) {
+      setStatus('Starting engine…');
+
+      var text = new TextDecoder('utf-8').decode(buf);
+      /* A blob-hosted script resolves Worker paths against the blob URL. */
+      text = text.replace(/new Worker\(["']([^"']+)["']\)/g, function (match, url) {
+        if (!/^(https?:|blob:|data:)/.test(url)) return 'new Worker("' + ASSET_BASE + url + '")';
+        return match;
+      });
+
+      var blob = new Blob([text], { type: 'application/javascript' });
+      var script = document.createElement('script');
+      script.src = URL.createObjectURL(blob);
+      script.onerror = function () { fail(new Error('engine failed to start')); };
+      document.body.appendChild(script);
+
+      /* onFirstFrameRendered() clears the overlay. If a build ever stops
+         calling it, drop the overlay once the game is visibly running so it
+         can never stay stuck over a playable game. */
+      var started = Date.now();
+      var watch = setInterval(function () {
+        if (finished) { clearInterval(watch); return; }
+        if (canvas.width > 300 && canvas.height > 150 && Date.now() - started > 8000) {
+          clearInterval(watch);
+          finish();
+        }
+      }, 500);
+    })['catch'](fail);
   })();
   </script>
 </body>
